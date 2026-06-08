@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// 문장 템플릿 저장소
+// 카테고리별 × 날씨 조건별 × 온도 범위별 문장 조각
+// ============================================
+model WeatherTemplate {
+  id        Int      @id @default(autoincrement())
+  category  String   // 'intro' | 'health_guide' | 'outfit_tip' | 'trend_conclusion'
+  condition String   // 'clear' | 'cloudy' | 'rainy' | 'snowy' | 'all'
+  minTemp   Float?   // null = 하한 없음
+  maxTemp   Float?   // null = 상한 없음
+  template  String   // {{city}}, {{temp}}, {{humidity}} 등 변수 포함 텍스트
+  weight    Int      @default(1) // 높을수록 선택 확률 증가
+  createdAt DateTime @default(now())
+
+  @@index([category, condition])
+  @@index([category, minTemp, maxTemp])
+}
+
+// ============================================
+// 일별 날씨 리포트 (영구 URL 지원)
+// /[location]/[date] 형태의 크롤링 가능 페이지
+// ============================================
+model DailyReport {
+  id               Int      @id @default(autoincrement())
+  location         String   // 영문 slug (seoul, busan, ...)
+  locationName     String   // 한글 표시명 (서울, 부산, ...)
+  date             String   // YYYY-MM-DD 형식
+  temperature      Float
+  apparentTemp     Float
+  humidity         Float
+  windSpeed        Float
+  precipitation    Float
+  precipType       Int      // PTY 코드
+  skyCondition     Int      // SKY 코드 (1:맑음, 3:구름많음, 4:흐림)
+  weatherDataJson  String   // 전체 기상 데이터 JSON
+  generatedArticle String   // 1200자 이상 생성 아티클
+  seoTitle         String
+  seoDescription   String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  outfits ReportOutfit[]
+
+  @@unique([location, date])
+  @@index([location])
+  @@index([date])
+  @@index([createdAt])
+}
+
+// ============================================
+// 복장 추천 아이템 마스터 데이터
+// ============================================
+model OutfitRecommendation {
+  id          Int      @id @default(autoincrement())
+  category    String   // 'top' | 'bottom' | 'outer' | 'shoes' | 'accessory'
+  itemName    String
+  description String
+  tempMin     Float?
+  tempMax     Float?
+  condition   String   @default("all") // 날씨 조건 필터
+  layerOrder  Int      @default(0)     // 레이어 순서 (0:기본, 1:이너, 2:미들, 3:아우터)
+  iconEmoji   String   @default("👕")
+  createdAt   DateTime @default(now())
+
+  reports ReportOutfit[]
+
+  @@index([category])
+  @@index([tempMin, tempMax])
+}
+
+// ============================================
+// 리포트 ↔ 복장 추천 다대다 중간 테이블
+// ============================================
+model ReportOutfit {
+  id       Int @id @default(autoincrement())
+  reportId Int
+  outfitId Int
+
+  report DailyReport          @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  outfit OutfitRecommendation @relation(fields: [outfitId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, outfitId])
+  @@index([reportId])
+  @@index([outfitId])
+}
