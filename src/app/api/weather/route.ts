@@ -165,38 +165,48 @@ export async function GET(request: Request) {
     }
     const selectedOutfits = Array.from(categoryMap.values()).flat();
 
-    // 6. Transaction: save report + outfit mappings
+    // 6. Transaction: save report + outfit mappings (upsert to avoid race conditions)
+    const reportData = {
+      location,
+      locationName: cityInfo.name,
+      date,
+      temperature: processed.temperature,
+      apparentTemp: processed.apparentTemp,
+      humidity: processed.humidity,
+      windSpeed: processed.windSpeed,
+      precipitation: processed.precipitation,
+      precipType: processed.precipType,
+      skyCondition: processed.skyCondition,
+      weatherDataJson: JSON.stringify(processed),
+      generatedArticle: article,
+      seoTitle,
+      seoDescription,
+    };
+
     const report = await prisma.$transaction(async (tx) => {
-      const newReport = await tx.dailyReport.create({
-        data: {
-          location,
-          locationName: cityInfo.name,
-          date,
-          temperature: processed.temperature,
-          apparentTemp: processed.apparentTemp,
-          humidity: processed.humidity,
-          windSpeed: processed.windSpeed,
-          precipitation: processed.precipitation,
-          precipType: processed.precipType,
-          skyCondition: processed.skyCondition,
-          weatherDataJson: JSON.stringify(processed),
-          generatedArticle: article,
-          seoTitle,
-          seoDescription,
-        },
+      const upserted = await tx.dailyReport.upsert({
+        where: { location_date: { location, date } },
+        create: reportData,
+        update: {},
       });
 
-      for (const outfit of selectedOutfits) {
-        await tx.reportOutfit.create({
-          data: {
-            reportId: newReport.id,
-            outfitId: outfit.id,
-          },
-        });
+      const existingMappings = await tx.reportOutfit.count({
+        where: { reportId: upserted.id },
+      });
+
+      if (existingMappings === 0) {
+        for (const outfit of selectedOutfits) {
+          await tx.reportOutfit.create({
+            data: {
+              reportId: upserted.id,
+              outfitId: outfit.id,
+            },
+          });
+        }
       }
 
       return tx.dailyReport.findUnique({
-        where: { id: newReport.id },
+        where: { id: upserted.id },
         include: {
           outfits: {
             include: { outfit: true },
