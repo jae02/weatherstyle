@@ -6,8 +6,10 @@ import {
   parseKMAResponse,
   getBaseDateTime,
   getConditionCode,
+  getForecastBaseTime,
+  buildDailyForecast,
 } from "@/utils/weather";
-import type { WeatherData } from "@/utils/weather";
+import type { WeatherData, DailyForecast } from "@/utils/weather";
 import { generateSEOArticle } from "@/utils/seoTextEngine";
 
 export const dynamic = "force-dynamic";
@@ -67,41 +69,60 @@ export async function GET(request: Request) {
     }
 
     const { baseDate, baseTime } = getBaseDateTime();
+    const { baseDate: forecastDate, baseTime: forecastTime } = getForecastBaseTime();
 
-    const url = new URL(
+    const ultraSrtUrl = new URL(
       "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
     );
-    url.searchParams.set("serviceKey", apiKey);
-    url.searchParams.set("pageNo", "1");
-    url.searchParams.set("numOfRows", "10");
-    url.searchParams.set("dataType", "JSON");
-    url.searchParams.set("base_date", baseDate);
-    url.searchParams.set("base_time", baseTime);
-    url.searchParams.set("nx", String(cityInfo.nx));
-    url.searchParams.set("ny", String(cityInfo.ny));
+    ultraSrtUrl.searchParams.set("serviceKey", apiKey);
+    ultraSrtUrl.searchParams.set("pageNo", "1");
+    ultraSrtUrl.searchParams.set("numOfRows", "10");
+    ultraSrtUrl.searchParams.set("dataType", "JSON");
+    ultraSrtUrl.searchParams.set("base_date", baseDate);
+    ultraSrtUrl.searchParams.set("base_time", baseTime);
+    ultraSrtUrl.searchParams.set("nx", String(cityInfo.nx));
+    ultraSrtUrl.searchParams.set("ny", String(cityInfo.ny));
+
+    const vilageFcstUrl = new URL(
+      "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
+    );
+    vilageFcstUrl.searchParams.set("serviceKey", apiKey);
+    vilageFcstUrl.searchParams.set("pageNo", "1");
+    vilageFcstUrl.searchParams.set("numOfRows", "1000");
+    vilageFcstUrl.searchParams.set("dataType", "JSON");
+    vilageFcstUrl.searchParams.set("base_date", forecastDate);
+    vilageFcstUrl.searchParams.set("base_time", forecastTime);
+    vilageFcstUrl.searchParams.set("nx", String(cityInfo.nx));
+    vilageFcstUrl.searchParams.set("ny", String(cityInfo.ny));
 
     let weatherData: WeatherData;
+    let dailyForecast: DailyForecast | null = null;
 
     try {
-      const res = await fetch(url.toString(), { cache: "no-store" });
-      const data = await res.json();
-
+      const [wRes, fRes] = await Promise.all([
+        fetch(ultraSrtUrl.toString(), { cache: "no-store" }),
+        fetch(vilageFcstUrl.toString(), { cache: "no-store" }),
+      ]);
+      
+      const wData = await wRes.json();
       if (
-        data?.response?.body?.items?.item &&
-        data.response.header.resultCode === "00"
+        wData?.response?.body?.items?.item &&
+        wData.response.header.resultCode === "00"
       ) {
-        weatherData = parseKMAResponse(data.response.body.items.item);
+        weatherData = parseKMAResponse(wData.response.body.items.item);
       } else {
-        console.warn("KMA API returned invalid data, using fallback");
-        weatherData = {
-          temperature: 22,
-          humidity: 55,
-          windSpeed: 2.5,
-          precipitation: 0,
-          precipType: 0,
-          skyCondition: 1,
-          windDirection: 270,
-        };
+        throw new Error("Invalid UltraSrtNcst data");
+      }
+
+      if (fRes.ok) {
+        const fData = await fRes.json();
+        if (
+          fData?.response?.body?.items?.item &&
+          fData.response.header.resultCode === "00"
+        ) {
+          const targetDateFormatted = date.replace(/-/g, "");
+          dailyForecast = buildDailyForecast(fData.response.body.items.item, targetDateFormatted);
+        }
       }
     } catch {
       console.warn("KMA API fetch failed, using fallback");
@@ -123,6 +144,7 @@ export async function GET(request: Request) {
     const templates = await prisma.weatherTemplate.findMany();
     const { article, seoTitle, seoDescription } = await generateSEOArticle({
       weather: processed,
+      dailyForecast: dailyForecast || undefined,
       cityName: cityInfo.name,
       dateStr: date,
       templates: templates.map((t) => ({
@@ -172,12 +194,16 @@ export async function GET(request: Request) {
       date,
       temperature: processed.temperature,
       apparentTemp: processed.apparentTemp,
+      minTemp: dailyForecast?.minTemp ?? null,
+      maxTemp: dailyForecast?.maxTemp ?? null,
       humidity: processed.humidity,
       windSpeed: processed.windSpeed,
       precipitation: processed.precipitation,
+      maxPrecipProb: dailyForecast?.maxPrecipProb ?? null,
       precipType: processed.precipType,
       skyCondition: processed.skyCondition,
       weatherDataJson: JSON.stringify(processed),
+      hourlyForecastJson: dailyForecast ? JSON.stringify(dailyForecast.hourly) : null,
       generatedArticle: article,
       seoTitle,
       seoDescription,

@@ -1,8 +1,8 @@
 import { Metadata } from "next";
 import { notFound } from "next/navigation";
 import prisma from "@/lib/prisma";
-import { CITY_GRID, processWeatherData, parseKMAResponse, getBaseDateTime, getSeason, getConditionCode, getWindDirectionLabel } from "@/utils/weather";
-import type { WeatherData } from "@/utils/weather";
+import { CITY_GRID, processWeatherData, parseKMAResponse, getBaseDateTime, getSeason, getConditionCode, getWindDirectionLabel, getForecastBaseTime, buildDailyForecast } from "@/utils/weather";
+import type { WeatherData, DailyForecast } from "@/utils/weather";
 import { generateSEOArticle } from "@/utils/seoTextEngine";
 
 // Force dynamic rendering for fresh weather data
@@ -68,6 +68,46 @@ async function fetchWeatherFromKMA(
   return parseKMAResponse(data.response.body.items.item);
 }
 
+async function fetchDailyForecastFromKMA(
+  nx: number,
+  ny: number,
+  targetDate: string
+): Promise<DailyForecast | null> {
+  const apiKey = process.env.KMA_API_KEY;
+  if (!apiKey) throw new Error("KMA_API_KEY is not set");
+
+  const { baseDate, baseTime } = getForecastBaseTime();
+
+  const url = new URL(
+    "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
+  );
+  url.searchParams.set("serviceKey", apiKey);
+  url.searchParams.set("pageNo", "1");
+  url.searchParams.set("numOfRows", "1000"); // Ensure we get the full day's data
+  url.searchParams.set("dataType", "JSON");
+  url.searchParams.set("base_date", baseDate);
+  url.searchParams.set("base_time", baseTime);
+  url.searchParams.set("nx", String(nx));
+  url.searchParams.set("ny", String(ny));
+
+  try {
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (
+      !data?.response?.body?.items?.item ||
+      data.response.header.resultCode !== "00"
+    ) {
+      return null;
+    }
+    const targetDateFormatted = targetDate.replace(/-/g, ""); // "YYYY-MM-DD" -> "YYYYMMDD"
+    return buildDailyForecast(data.response.body.items.item, targetDateFormatted);
+  } catch (error) {
+    console.error("Forecast API error:", error);
+    return null;
+  }
+}
+
 // ============================================
 // Get or create daily report
 // ============================================
@@ -87,10 +127,16 @@ async function getOrCreateReport(location: string, date: string) {
 
   if (existing) return existing;
 
-  // Fetch fresh weather data
+  // Fetch fresh weather data concurrently
   let weatherData: WeatherData;
+  let dailyForecast: DailyForecast | null = null;
   try {
-    weatherData = await fetchWeatherFromKMA(cityInfo.nx, cityInfo.ny);
+    const [wData, fData] = await Promise.all([
+      fetchWeatherFromKMA(cityInfo.nx, cityInfo.ny),
+      fetchDailyForecastFromKMA(cityInfo.nx, cityInfo.ny, date),
+    ]);
+    weatherData = wData;
+    dailyForecast = fData;
   } catch (err) {
     console.error("Weather API error:", err);
     weatherData = {
@@ -112,6 +158,7 @@ async function getOrCreateReport(location: string, date: string) {
   // Generate article
   const { article, seoTitle, seoDescription } = await generateSEOArticle({
     weather: processed,
+    dailyForecast: dailyForecast || undefined,
     cityName: cityInfo.name,
     dateStr: date,
     templates: templates.map((t) => ({
@@ -162,12 +209,16 @@ async function getOrCreateReport(location: string, date: string) {
     date,
     temperature: processed.temperature,
     apparentTemp: processed.apparentTemp,
+    minTemp: dailyForecast?.minTemp ?? null,
+    maxTemp: dailyForecast?.maxTemp ?? null,
     humidity: processed.humidity,
     windSpeed: processed.windSpeed,
     precipitation: processed.precipitation,
+    maxPrecipProb: dailyForecast?.maxPrecipProb ?? null,
     precipType: processed.precipType,
     skyCondition: processed.skyCondition,
     weatherDataJson: JSON.stringify(processed),
+    hourlyForecastJson: dailyForecast ? JSON.stringify(dailyForecast.hourly) : null,
     generatedArticle: article,
     seoTitle,
     seoDescription,
@@ -383,7 +434,9 @@ export default async function WeatherReportPage({ params }: PageProps) {
                 {report.temperature.toFixed(1)}
                 <span className="dashboard__card-unit">°C</span>
               </div>
-              <div className="dashboard__card-desc">{season} 평균 대비 분석</div>
+              <div className="dashboard__card-desc">
+                최저 {report.minTemp ?? '-'}°C / 최고 {report.maxTemp ?? '-'}°C
+              </div>
             </div>
 
             <div className="dashboard__card dashboard__card--apparent" id="card-apparent">
@@ -436,13 +489,39 @@ export default async function WeatherReportPage({ params }: PageProps) {
                 <span className="dashboard__card-unit">mm</span>
               </div>
               <div className="dashboard__card-desc">
-                {report.precipitation > 0
-                  ? "우산을 챙기세요"
+                {report.precipitation > 0 || (report.maxPrecipProb ?? 0) > 0
+                  ? `최대 강수확률 ${report.maxPrecipProb}%`
                   : "강수 없음"}
               </div>
             </div>
           </div>
         </section>
+
+        {/* Hourly Forecast Timeline */}
+        {report.hourlyForecastJson && (
+          <section className="timeline-section" id="timeline-section" aria-label="시간대별 날씨 타임라인">
+            <h2 className="section-header__title" style={{ marginTop: '2rem', marginBottom: '1rem', fontSize: '1.25rem' }}>
+              🕒 시간대별 예보
+            </h2>
+            <div className="timeline-container">
+              {JSON.parse(report.hourlyForecastJson).map((hourly: any, index: number) => {
+                const hour = hourly.time.substring(0, 2);
+                const emoji = getConditionEmoji(hourly.precipType, hourly.skyCondition);
+                const isRaining = hourly.precipType > 0 || hourly.precipProb >= 50;
+                return (
+                  <div key={index} className={`timeline-item ${isRaining ? 'timeline-item--rain' : ''}`}>
+                    <div className="timeline-item__time">{hour}시</div>
+                    <div className="timeline-item__icon">{emoji}</div>
+                    <div className="timeline-item__temp">{hourly.temperature}°C</div>
+                    <div className="timeline-item__prob">
+                      {hourly.precipProb > 0 ? `💧 ${hourly.precipProb}%` : ''}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Weather Condition Banner */}
         <div className="condition-banner" id="condition-banner">
@@ -452,12 +531,25 @@ export default async function WeatherReportPage({ params }: PageProps) {
               오늘의 날씨: {conditionLabel}
             </div>
             <div className="condition-banner__desc">
-              {conditionDesc} 기온 {report.temperature.toFixed(1)}°C, 체감 온도{" "}
+              {conditionDesc} 기온 {report.temperature.toFixed(1)}°C (최저 {report.minTemp ?? '-'}° / 최고 {report.maxTemp ?? '-'}°), 체감 온도{" "}
               {report.apparentTemp.toFixed(1)}°C, 습도 {report.humidity.toFixed(0)}
               %, 풍속 {report.windSpeed.toFixed(1)}m/s
             </div>
           </div>
         </div>
+
+        {/* Umbrella Warning Banner */}
+        {(report.maxPrecipProb ?? 0) >= 40 && (
+          <div className="condition-banner" style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', marginTop: '1rem' }}>
+            <span className="condition-banner__icon">☂️</span>
+            <div className="condition-banner__content">
+              <div className="condition-banner__label" style={{ color: 'var(--accent-blue)' }}>우산 준비 안내</div>
+              <div className="condition-banner__desc">
+                오늘 최대 강수확률이 {report.maxPrecipProb}%입니다. 외출 시 우산을 꼭 챙기시기 바랍니다.
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Outfit Recommendations */}
         <section className="outfit-section" id="outfit-section" aria-label="복장 추천">

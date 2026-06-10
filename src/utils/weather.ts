@@ -27,6 +27,28 @@ export interface ProcessedWeather extends WeatherData {
   conditionDesc: string;
 }
 
+export interface HourlyForecast {
+  time: string;          // "0600", "0900", ...
+  temperature: number;   // TMP
+  humidity: number;      // REH
+  windSpeed: number;     // WSD
+  precipProb: number;    // POP
+  precipType: number;    // PTY
+  precipitation: number; // PCP
+  skyCondition: number;  // SKY
+}
+
+export interface DailyForecast {
+  minTemp: number;         // TMN
+  maxTemp: number;         // TMX
+  tempDiff: number;        // maxTemp - minTemp
+  maxPrecipProb: number;   // Max POP across the day
+  rainExpected: boolean;   // Any PTY matching rain
+  snowExpected: boolean;   // Any PTY matching snow
+  hourly: HourlyForecast[];
+  dominantCondition: string; // clear, cloudy, rainy, snowy based on the whole day
+}
+
 export type TemperatureRange =
   | 'extreme_cold'
   | 'cold'
@@ -551,6 +573,172 @@ export function getBaseDateTime(
     String(hour).padStart(2, '0') + '00';
 
   return { baseDate, baseTime };
+}
+
+// ---------------------------------------------------------------------------
+// 10.5. Base Date/Time for 단기예보 (getVilageFcst) API
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the most recent valid `base_date` and `base_time` for the KMA
+ * 단기예보 (VilageFcst) API.
+ *
+ * Update times: 02:10, 05:10, 08:10, 11:10, 14:10, 17:10, 20:10, 23:10
+ */
+export function getForecastBaseTime(
+  now: Date = new Date(),
+): { baseDate: string; baseTime: string } {
+  let year = now.getFullYear();
+  let month = now.getMonth() + 1;
+  let day = now.getDate();
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+
+  const validTimes = [23, 20, 17, 14, 11, 8, 5, 2];
+  let targetHour = 23;
+  let useYesterday = false;
+
+  const currentTotalMins = hour * 60 + minute;
+
+  // Find the most recent valid time that has been published (10 mins after the hour)
+  const found = validTimes.find((vt) => currentTotalMins >= vt * 60 + 10);
+
+  if (found !== undefined) {
+    targetHour = found;
+  } else {
+    // If not found, it means it's before 02:10 today, so we must use yesterday's 23:00
+    targetHour = 23;
+    useYesterday = true;
+  }
+
+  if (useYesterday) {
+    const prev = new Date(now);
+    prev.setDate(prev.getDate() - 1);
+    year = prev.getFullYear();
+    month = prev.getMonth() + 1;
+    day = prev.getDate();
+  }
+
+  const baseDate =
+    String(year) +
+    String(month).padStart(2, '0') +
+    String(day).padStart(2, '0');
+
+  const baseTime = String(targetHour).padStart(2, '0') + '00';
+
+  return { baseDate, baseTime };
+}
+
+// ---------------------------------------------------------------------------
+// 10.6. Parse VilageFcst (단기예보) and build DailyForecast
+// ---------------------------------------------------------------------------
+
+export function parseVilageFcstResponse(items: any[], targetDate: string): HourlyForecast[] {
+  if (!Array.isArray(items)) return [];
+
+  const timeMap = new Map<string, HourlyForecast>();
+
+  for (const item of items) {
+    // KMA dates are YYYYMMDD
+    if (item.fcstDate !== targetDate) continue;
+
+    const time = item.fcstTime; // e.g., "0900"
+    if (!timeMap.has(time)) {
+      timeMap.set(time, {
+        time,
+        temperature: 0,
+        humidity: 0,
+        windSpeed: 0,
+        precipProb: 0,
+        precipType: 0,
+        precipitation: 0,
+        skyCondition: 1,
+      });
+    }
+    const slot = timeMap.get(time)!;
+    const val = item.fcstValue;
+
+    switch (item.category) {
+      case 'TMP': slot.temperature = parseFloat(val); break;
+      case 'REH': slot.humidity = parseFloat(val); break;
+      case 'WSD': slot.windSpeed = parseFloat(val); break;
+      case 'POP': slot.precipProb = parseFloat(val); break;
+      case 'PTY': slot.precipType = parseInt(val, 10); break;
+      case 'PCP': slot.precipitation = parsePrecipitation(val); break;
+      case 'SKY': slot.skyCondition = parseInt(val, 10); break;
+    }
+  }
+
+  // Sort chronologically
+  return Array.from(timeMap.values()).sort((a, b) => a.time.localeCompare(b.time));
+}
+
+export function buildDailyForecast(items: any[], targetDate: string): DailyForecast {
+  const hourly = parseVilageFcstResponse(items, targetDate);
+
+  let minTemp = 999;
+  let maxTemp = -999;
+
+  // TMN (일 최저) and TMX (일 최고) can appear in any time slot for the target date
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      if (item.fcstDate !== targetDate) continue;
+      if (item.category === 'TMN') {
+        minTemp = parseFloat(item.fcstValue);
+      }
+      if (item.category === 'TMX') {
+        maxTemp = parseFloat(item.fcstValue);
+      }
+    }
+  }
+
+  // Fallback if TMN/TMX weren't found
+  if (minTemp === 999 && hourly.length > 0) {
+    minTemp = Math.min(...hourly.map(h => h.temperature));
+  }
+  if (maxTemp === -999 && hourly.length > 0) {
+    maxTemp = Math.max(...hourly.map(h => h.temperature));
+  }
+
+  // If no data at all
+  if (minTemp === 999) minTemp = 0;
+  if (maxTemp === -999) maxTemp = 0;
+
+  const tempDiff = maxTemp - minTemp;
+
+  let maxPrecipProb = 0;
+  let rainExpected = false;
+  let snowExpected = false;
+
+  for (const h of hourly) {
+    if (h.precipProb > maxPrecipProb) maxPrecipProb = h.precipProb;
+    if (h.precipType === 1 || h.precipType === 2 || h.precipType === 4 || h.precipType === 5) rainExpected = true;
+    if (h.precipType === 3 || h.precipType === 6 || h.precipType === 7) snowExpected = true;
+  }
+
+  let dominantCondition = 'clear';
+  if (snowExpected) {
+    dominantCondition = 'snowy';
+  } else if (rainExpected) {
+    dominantCondition = 'rainy';
+  } else {
+    // If average SKY > 2.5, consider it cloudy
+    const avgSky = hourly.length ? hourly.reduce((sum, h) => sum + h.skyCondition, 0) / hourly.length : 1;
+    if (avgSky >= 3) {
+      dominantCondition = 'cloudy';
+    }
+  }
+
+  return {
+    minTemp,
+    maxTemp,
+    tempDiff,
+    maxPrecipProb,
+    rainExpected,
+    snowExpected,
+    hourly,
+    dominantCondition,
+  };
 }
 
 // ---------------------------------------------------------------------------

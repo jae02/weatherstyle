@@ -87,6 +87,15 @@ const weatherTemplates: WeatherTemplateSeed[] = [
   { category: 'intro', condition: 'all', minTemp: null, maxTemp: null, template: '날씨에 맞는 옷차림, 고민되시죠? {{date}} {{city}}의 기온은 {{temp}}°C, 체감 온도는 {{apparentTemp}}°C입니다. 오늘의 날씨 분석과 패션 팁을 확인해 보세요.', weight: 2 },
 
   // ──────────────────────────────────────────────────────────
+  // ADVANCED: Daily Forecast Templates (minTemp, maxTemp, tempDiff, rainTime)
+  // ──────────────────────────────────────────────────────────
+  { category: 'intro', condition: 'all', minTemp: null, maxTemp: null, template: '오늘 {{city}}의 날씨는 최저 기온 {{minTemp}}°C, 최고 기온 {{maxTemp}}°C로 예상됩니다. 일교차가 {{tempDiff}}°C에 달하는 만큼 시간대별 기온 변화에 대비한 옷차림이 필요합니다.', weight: 5 },
+  { category: 'intro', condition: 'all', minTemp: null, maxTemp: null, template: '하루 동안 기온 변화가 큰 {{city}}의 오늘 날씨입니다. 최저 {{minTemp}}°C에서 최고 {{maxTemp}}°C까지 오르며 일교차는 {{tempDiff}}°C를 기록할 전망입니다.', weight: 5 },
+  { category: 'intro', condition: 'rainy', minTemp: null, maxTemp: null, template: '오늘 {{city}}에는 비 소식이 있습니다. 특히 {{rainTime}} 비가 내릴 것으로 예상되며 하루 최대 강수확률은 {{maxPrecipProb}}%입니다. {{umbrellaAdvice}}', weight: 6 },
+  { category: 'intro', condition: 'cloudy', minTemp: null, maxTemp: null, template: '구름이 많은 {{city}}의 오늘, 최고 기온은 {{maxTemp}}°C, 최저 기온은 {{minTemp}}°C로 예상됩니다. 비록 흐리지만 최대 강수확률은 {{maxPrecipProb}}%로, {{umbrellaAdvice}}', weight: 4 },
+
+
+  // ──────────────────────────────────────────────────────────
   // CATEGORY: health_guide (본론1 - 체감 온도별 건강 가이드) — 55 templates
   // ──────────────────────────────────────────────────────────
 
@@ -226,6 +235,14 @@ const weatherTemplates: WeatherTemplateSeed[] = [
   { category: 'outfit_tip', condition: 'cloudy', minTemp: 15, maxTemp: 25, template: '구름이 많은 {{temp}}°C의 날씨에는 옷을 선택할 때 밝은 컬러로 기분 전환을 해보세요. 파스텔 톤의 상의에 화이트 하의를 매치하면 흐린 날에도 화사한 분위기를 연출할 수 있습니다.', weight: 2 },
   { category: 'outfit_tip', condition: 'cloudy', minTemp: 15, maxTemp: 25, template: '흐린 날에도 자외선은 존재합니다. UV 차단 기능이 있는 가벼운 재킷을 챙기시면 자외선 차단과 갑작스러운 기온 변화에 동시에 대비할 수 있습니다.', weight: 1 },
   { category: 'outfit_tip', condition: 'cloudy', minTemp: 25, maxTemp: null, template: '흐리지만 무더운 {{temp}}°C의 날씨에는 통풍이 잘 되는 오버핏 상의와 반바지로 편안하게 입으세요. 갑작스러운 소나기에 대비해 접이식 우산도 챙겨두면 좋습니다.', weight: 1 },
+
+  // ──────────────────────────────────────────────────────────
+  // ADVANCED: Daily Forecast Outfit Tips (minTemp, maxTemp, tempDiff, rainTime)
+  // ──────────────────────────────────────────────────────────
+  { category: 'outfit_tip', condition: 'all', minTemp: null, maxTemp: null, template: '오늘처럼 일교차가 {{tempDiff}}°C에 이르는 날에는 카디건이나 플리스 같은 얇은 겉옷을 겹쳐 입는 레이어드 룩이 필수입니다. 낮 최고 기온 {{maxTemp}}°C에서는 벗어서 가볍게 들고 다닐 수 있는 아이템을 선택하세요.', weight: 6 },
+  { category: 'outfit_tip', condition: 'all', minTemp: null, maxTemp: null, template: '아침 최저 기온 {{minTemp}}°C와 한낮 최고 기온 {{maxTemp}}°C의 큰 온도차를 극복하기 위해, 두꺼운 외투 하나보다는 입고 벗기 편한 아우터를 준비하는 것이 좋습니다.', weight: 5 },
+  { category: 'outfit_tip', condition: 'rainy', minTemp: null, maxTemp: null, template: '{{rainTime}}에 비가 집중될 예정이므로, 그 시간대 외출 계획이 있다면 레인부츠와 방수 재킷을 착용하세요. 최대 강수확률이 {{maxPrecipProb}}%에 달해 {{umbrellaAdvice}}', weight: 6 },
+  { category: 'outfit_tip', condition: 'cloudy', minTemp: null, maxTemp: null, template: '비록 지금은 비가 오지 않더라도 하루 중 강수확률이 {{maxPrecipProb}}%까지 오를 수 있습니다. {{umbrellaAdvice}} 아우터 역시 생활 방수가 되는 바람막이가 좋습니다.', weight: 5 },
 
   // ──────────────────────────────────────────────────────────
   // CATEGORY: trend_conclusion (결론 - 패션 트렌드 제언) — 45 templates

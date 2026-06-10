@@ -7,7 +7,7 @@
 
 import {
   ProcessedWeather,
-  TemperatureRange,
+  DailyForecast,
   getSeason,
   getWindDirectionLabel,
   getTempRangeLabel,
@@ -272,6 +272,7 @@ export class ArticleComposer {
   private picker: TemplatePicker;
   private rng: SeededRandom;
   private weather: ProcessedWeather;
+  private dailyForecast: DailyForecast | null;
   private cityName: string;
   private dateStr: string;
   private season: string;
@@ -279,6 +280,7 @@ export class ArticleComposer {
   constructor(params: {
     templates: TemplateData[];
     weather: ProcessedWeather;
+    dailyForecast?: DailyForecast;
     cityName: string;
     dateStr: string; // 'YYYY-MM-DD'
   }) {
@@ -286,6 +288,7 @@ export class ArticleComposer {
     this.rng = new SeededRandom(seedStr);
     this.picker = new TemplatePicker(params.templates, this.rng);
     this.weather = params.weather;
+    this.dailyForecast = params.dailyForecast || null;
     this.cityName = params.cityName;
     this.dateStr = params.dateStr;
     this.season = getSeason(params.dateStr);
@@ -297,11 +300,7 @@ export class ArticleComposer {
 
   private interpolate(template: string): string {
     const w = this.weather;
-    const seasonTips = SEASON_TIPS[this.season] ?? SEASON_TIPS['봄'];
-    const seasonTip = this.rng.pick(seasonTips);
-
     const windDir = getWindDirectionLabel(w.windDirection);
-    const tempRangeLabel = getTempRangeLabel(w.tempRange);
 
     // Format date for display: 'YYYY년 MM월 DD일'
     const formattedDate = this.formatDateKorean(this.dateStr);
@@ -318,8 +317,14 @@ export class ArticleComposer {
       condition: w.conditionLabel,
       conditionDesc: w.conditionDesc,
       season: this.season,
-      seasonTip: seasonTip,
-      tempRange: tempRangeLabel,
+      seasonTip: this.getSeasonTip(),
+      tempRange: this.getTempRangeDesc(),
+      minTemp: String(this.dailyForecast?.minTemp ?? Math.round(this.weather.temperature - 5)),
+      maxTemp: String(this.dailyForecast?.maxTemp ?? Math.round(this.weather.temperature + 5)),
+      tempDiff: String(this.dailyForecast?.tempDiff ?? 10),
+      maxPrecipProb: String(this.dailyForecast?.maxPrecipProb ?? 0),
+      rainTime: this.getRainTimeDesc(),
+      umbrellaAdvice: this.getUmbrellaAdvice(),
       heatIndex: w.heatIndex !== null ? `${w.heatIndex}` : '해당없음',
       windChill: w.windChill !== null ? `${w.windChill}` : '해당없음',
     };
@@ -348,6 +353,45 @@ export class ArticleComposer {
       return `${y}년 ${m}월 ${d}일`;
     }
     return dateStr;
+  }
+
+  private getSeasonTip(): string {
+    const seasonTips = SEASON_TIPS[this.season] ?? SEASON_TIPS['봄'];
+    return this.rng.pick(seasonTips);
+  }
+
+  private getTempRangeDesc(): string {
+    return getTempRangeLabel(this.weather.tempRange);
+  }
+
+  private getRainTimeDesc(): string {
+    if (!this.dailyForecast || this.dailyForecast.hourly.length === 0) return '오후 늦게';
+    const rainSlots = this.dailyForecast.hourly.filter(h => h.precipProb >= 40 || h.precipType > 0);
+    if (rainSlots.length === 0) return '하루 중';
+    
+    // Group slots into Morning, Afternoon, Evening
+    let morning = false, afternoon = false, evening = false;
+    for (const slot of rainSlots) {
+      const hour = parseInt(slot.time.substring(0, 2), 10);
+      if (hour < 12) morning = true;
+      else if (hour < 18) afternoon = true;
+      else evening = true;
+    }
+
+    if (morning && afternoon && evening) return '하루 종일';
+    if (morning && afternoon) return '아침부터 오후까지';
+    if (afternoon && evening) return '오후부터 저녁까지';
+    if (morning) return '오전에';
+    if (afternoon) return '오후에';
+    if (evening) return '저녁에';
+    return '특정 시간대에';
+  }
+
+  private getUmbrellaAdvice(): string {
+    const prob = this.dailyForecast?.maxPrecipProb ?? 0;
+    if (prob >= 70) return '외출 시 우산을 반드시 챙기시길 바랍니다.';
+    if (prob >= 40) return '만약을 위해 접이식 우산을 챙기시는 것을 권장합니다.';
+    return '비가 올 확률은 낮지만, 혹시 모를 소나기에 대비해 가벼운 우산을 챙기는 것도 좋습니다.';
   }
 
   // -----------------------------------------------------------------------
@@ -665,6 +709,7 @@ export const DEFAULT_TEMPLATES: TemplateData[] = [
  */
 export async function generateSEOArticle(params: {
   weather: ProcessedWeather;
+  dailyForecast?: DailyForecast;
   cityName: string;
   dateStr: string;
   templates: TemplateData[];

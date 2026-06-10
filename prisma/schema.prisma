@@ -36,12 +36,16 @@ model DailyReport {
   date             String   // YYYY-MM-DD 형식
   temperature      Float
   apparentTemp     Float
+  minTemp          Float?   // 일 최저기온 (TMN)
+  maxTemp          Float?   // 일 최고기온 (TMX)
   humidity         Float
   windSpeed        Float
   precipitation    Float
+  maxPrecipProb    Float?   // 하루 최대 강수확률
   precipType       Int      // PTY 코드
   skyCondition     Int      // SKY 코드 (1:맑음, 3:구름많음, 4:흐림)
   weatherDataJson  String   // 전체 기상 데이터 JSON
+  hourlyForecastJson String? // 시간대별 예보 JSON
   generatedArticle String   // 1200자 이상 생성 아티클
   seoTitle         String
   seoDescription   String
